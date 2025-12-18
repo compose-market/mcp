@@ -10,7 +10,7 @@ on:
       batch_size:
         description: 'Batch size (cleanup after N servers)'
         required: false
-        default: '100'
+        default: '20'  # Reduced from 100 to prevent disk issues
       filter:
         description: 'Optional filter (namespace/slug)'
         required: false
@@ -26,6 +26,16 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+      
+      - name: Free up disk space
+        run: |
+          # Remove unnecessary pre-installed software
+          sudo rm -rf /usr/share/dotnet
+          sudo rm -rf /usr/local/lib/android
+          sudo rm -rf /opt/ghc
+          sudo rm -rf /opt/hostedtoolcache/CodeQL
+          sudo docker system prune -af --volumes
+          df -h
       
       - name: Set up Node.js
         uses: actions/setup-node@v4
