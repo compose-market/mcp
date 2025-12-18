@@ -2,9 +2,8 @@ name: Sync MCP Registry Daily
 
 on:
   schedule:
-    # Run daily at 2 AM UTC
     - cron: '0 2 * * *'
-  workflow_dispatch: # Allow manual trigger
+  workflow_dispatch:
 
 jobs:
   sync-registry:
@@ -15,9 +14,6 @@ jobs:
     steps:
       - name: Checkout mcp repository
         uses: actions/checkout@v4
-        with:
-          repository: compose-market/mcp
-          token: ${{ secrets.GITHUB_TOKEN }}
       
       - name: Set up Node.js
         uses: actions/setup-node@v4
@@ -59,9 +55,7 @@ jobs:
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add src/data/mcpServers.json
           
-          # Count new servers
           NEW_COUNT=$(jq '.count' src/data/mcpServers.json)
-          
           git commit -m "Update MCP registry: $NEW_COUNT total servers"
           git push
       
@@ -70,7 +64,6 @@ jobs:
         uses: actions/github-script@v7
         with:
           script: |
-            // Get list of new containerizable servers
             const fs = require('fs');
             const registry = JSON.parse(fs.readFileSync('src/data/mcpServers.json', 'utf8'));
             
@@ -83,7 +76,6 @@ jobs:
             
             console.log(`Found ${newServers.length} servers needing containerization`);
             
-            // Only trigger if there are new containerizable servers
             if (newServers.length > 0) {
               await github.rest.actions.createWorkflowDispatch({
                 owner: context.repo.owner,
@@ -92,7 +84,7 @@ jobs:
                 ref: 'main',
                 inputs: {
                   concurrency: '10',
-                  batch_size: '100',
+                  batch_size: '20',
                   filter: ''
                 }
               });
