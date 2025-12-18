@@ -1,0 +1,5 @@
+node_modules/
+.build-temp/
+*.log
+.env
+build-progress.json

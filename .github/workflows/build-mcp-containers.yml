@@ -1,0 +1,73 @@
+name: Build and Push MCP Container Images
+
+on:
+  workflow_dispatch:
+    inputs:
+      concurrency:
+        description: 'Number of concurrent builds'
+        required: false
+        default: '10'
+      batch_size:
+        description: 'Batch size (cleanup after N servers)'
+        required: false
+        default: '100'
+      filter:
+        description: 'Optional filter (namespace/slug)'
+        required: false
+        default: ''
+
+jobs:
+  build-containers:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+      
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      
+      - name: Install dependencies
+        run: |
+          npm install dotenv simple-git dockerode
+          npm install -g tsx
+      
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      
+      - name: Install Nixpacks (optional)
+        run: |
+          curl -sSL https://nixpacks.com/install.sh | bash
+          echo "$HOME/.nixpacks/bin" >> $GITHUB_PATH
+        continue-on-error: true
+      
+      - name: Run containerization script
+        env:
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          BUILD_CONCURRENCY: ${{ github.event.inputs.concurrency }}
+          BUILD_BATCH_SIZE: ${{ github.event.inputs.batch_size }}
+        run: |
+          ARGS="--concurrency=${{ github.event.inputs.concurrency }} --batch-size=${{ github.event.inputs.batch_size }}"
+          if [ -n "${{ github.event.inputs.filter }}" ]; then
+            ARGS="$ARGS --filter=${{ github.event.inputs.filter }}"
+          fi
+          tsx scripts/build-images.ts $ARGS
+      
+      - name: Upload build artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-logs
+          path: |
+            build.log
+            src/data/build-progress.json
+          retention-days: 7
