@@ -26,8 +26,8 @@ jobs:
           repository: compose-market/backend
           path: backend
           sparse-checkout: |
-            backend/services/connector/scripts/sync.ts
-            backend/services/connector/package.json
+            services/connector/scripts/sync.ts
+            services/connector/package.json
       
       - name: Install dependencies
         run: |
