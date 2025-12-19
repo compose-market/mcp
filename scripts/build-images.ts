@@ -50,6 +50,9 @@ const args = process.argv.slice(2);
 const concurrency = args.find(a => a.startsWith("--concurrency="))?.split("=")[1] || String(CONCURRENCY_LIMIT);
 const batchSize = args.find(a => a.startsWith("--batch-size="))?.split("=")[1] || String(BATCH_SIZE);
 const filterArg = args.find(a => a.startsWith("--filter="))?.split("=")[1];
+const batchNumber = parseInt(args.find(a => a.startsWith("--batch="))?.split("=")[1] || "0");
+const totalBatches = parseInt(args.find(a => a.startsWith("--total-batches="))?.split("=")[1] || "1");
+
 
 interface BuildProgress {
     lastBuiltId: string | null;
@@ -110,6 +113,47 @@ async function loadProgress(): Promise<BuildProgress> {
 
 async function saveProgress(progress: BuildProgress): Promise<void> {
     await fs.writeFile(PROGRESS_PATH, JSON.stringify(progress, null, 2), "utf8");
+}
+
+// =============================================================================
+// GHCR Image Existence Check
+// =============================================================================
+
+const ghcrImageCache = new Map<string, boolean>();
+
+async function checkImageExistsOnGHCR(imageName: string): Promise<boolean> {
+    // Check cache first
+    if (ghcrImageCache.has(imageName)) {
+        return ghcrImageCache.get(imageName)!;
+    }
+
+    try {
+        // Parse image name (format: ghcr.io/compose-market/mcp/name:tag)
+        const parts = imageName.replace("ghcr.io/", "").split("/");
+        const repo = parts.slice(0, -1).join("/"); // compose-market/mcp
+        const nameTag = parts[parts.length - 1]; // name:tag
+        const [name, tag] = nameTag.split(":");
+
+        // Use Docker Registry HTTP API V2
+        // https://ghcr.io/v2/{namespace}/{repo}/manifests/{tag}
+        const manifestUrl = `https://ghcr.io/v2/${repo}/${name}/manifests/${tag || "latest"}`;
+
+        const response = await fetch(manifestUrl, {
+            method: "HEAD",
+            headers: {
+                "Authorization": `Bearer ${process.env.GHCR_TOKEN || process.env.GITHUB_TOKEN || ""}`,
+            },
+        });
+
+        const exists = response.ok;
+        ghcrImageCache.set(imageName, exists);
+
+        return exists;
+    } catch (error) {
+        console.warn(`    Warning: Could not check GHCR for ${imageName}: ${error instanceof Error ? error.message : String(error)}`);
+        ghcrImageCache.set(imageName, false);
+        return false;
+    }
 }
 
 // =============================================================================
@@ -374,8 +418,36 @@ async function buildServer(
 
     let imageName = `${DOCKER_REGISTRY}/${cleanName}`;
 
+    // Check if server already has an npm package - skip containerization
+    // Users can just use `npx <package>` directly
+    if (packageName && !repoUrl) {
+        console.log(`  ⊘ Skipped: Has NPM package (${packageName}), no containerization needed`);
+        return { success: false, error: "Has NPM package, use npx instead" };
+    }
+
     let repoDir: string | null = null;
     let sha: string | undefined;
+
+    // Determine the image tag early to check GHCR
+    let fullImageName = imageName;
+
+    // If we have a repo, we'll use SHA-based tagging
+    if (repoUrl) {
+        // We need to clone first to get the SHA for checking GHCR
+        // But let's try a predictable tag pattern first
+        fullImageName = `${imageName}:latest`;
+    } else if (packageName) {
+        fullImageName = `${imageName}:latest`;
+    }
+
+    // Check if image already exists on GHCR
+    console.log(`  Checking GHCR for existing image...`);
+    const imageExists = await checkImageExistsOnGHCR(fullImageName);
+
+    if (imageExists) {
+        console.log(`  ⊘ Skipped: Image already exists on GHCR (${fullImageName})`);
+        return { success: true, image: fullImageName };
+    }
 
     try {
         // Strategy 1 & 2: Clone repository if available
@@ -567,6 +639,16 @@ async function main() {
     // Skip already processed
     serversToProcess = serversToProcess.filter(s => !progress.completedBuilds[s.id]);
     console.log(`${serversToProcess.length} servers remaining to process`);
+
+    // Apply batch slicing for parallel processing
+    if (totalBatches > 1) {
+        const serversPerBatch = Math.ceil(serversToProcess.length / totalBatches);
+        const startIdx = batchNumber * serversPerBatch;
+        const endIdx = Math.min(startIdx + serversPerBatch, serversToProcess.length);
+
+        serversToProcess = serversToProcess.slice(startIdx, endIdx);
+        console.log(`Batch ${batchNumber + 1}/${totalBatches}: Processing servers ${startIdx + 1}-${endIdx} (${serversToProcess.length} servers)`);
+    }
 
     if (serversToProcess.length === 0) {
         console.log("\n✓ All servers already processed!");

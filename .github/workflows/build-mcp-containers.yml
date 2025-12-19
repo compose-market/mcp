@@ -19,9 +19,16 @@ on:
 jobs:
   build-containers:
     runs-on: ubuntu-latest
+    timeout-minutes: 180  # 3 hours per batch
     permissions:
       contents: read
       packages: write
+    
+    strategy:
+      matrix:
+        batch: [0, 1, 2, 3, 4]  # 5 parallel batches
+      max-parallel: 5
+      fail-fast: false  # Continue other batches if one fails
     
     steps:
       - name: Checkout repository
@@ -67,6 +74,7 @@ jobs:
           BUILD_BATCH_SIZE: ${{ github.event.inputs.batch_size }}
         run: |
           ARGS="--concurrency=${{ github.event.inputs.concurrency }} --batch-size=${{ github.event.inputs.batch_size }}"
+          ARGS="$ARGS --batch=${{ matrix.batch }} --total-batches=5"
           if [ -n "${{ github.event.inputs.filter }}" ]; then
             ARGS="$ARGS --filter=${{ github.event.inputs.filter }}"
           fi

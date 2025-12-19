@@ -41,7 +41,8 @@ jobs:
       
       - name: Copy updated registry to mcp repo
         run: |
-          cp compose-market/backend/mcp/src/data/mcpServers.json src/data/mcpServers.json
+          mkdir -p src/data
+          cp compose-market/backend/services/connector/data/mcpServers.json src/data/mcpServers.json
       
       - name: Check for changes
         id: check_changes
