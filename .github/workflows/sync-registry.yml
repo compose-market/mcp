@@ -23,26 +23,26 @@ jobs:
       - name: Checkout sync script from main repo
         uses: actions/checkout@v4
         with:
-          repository: compose-market/compose-market
-          path: compose-market
+          repository: compose-market/backend
+          path: backend
           sparse-checkout: |
             backend/services/connector/scripts/sync.ts
             backend/services/connector/package.json
       
       - name: Install dependencies
         run: |
-          cd compose-market/backend/services/connector
+          cd backend/services/connector
           npm install --legacy-peer-deps
       
       - name: Run registry sync
         run: |
-          cd compose-market/backend/services/connector
+          cd backend/services/connector
           npx tsx scripts/sync.ts
       
       - name: Copy updated registry to mcp repo
         run: |
           mkdir -p src/data
-          cp compose-market/backend/services/connector/data/mcpServers.json src/data/mcpServers.json
+          cp backend/services/connector/data/mcpServers.json src/data/mcpServers.json
       
       - name: Check for changes
         id: check_changes
