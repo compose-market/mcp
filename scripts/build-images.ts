@@ -380,6 +380,16 @@ async function buildServer(
 
     const repoUrl = server.repository?.url;
 
+    // Validate repository URL format if present
+    if (repoUrl) {
+        // Check if URL is complete (has owner AND repo name)
+        const githubMatch = repoUrl.match(/github\.com\/([^\/]+)\/([^\/\.]+)/);
+        if (!githubMatch || !githubMatch[2]) {
+            console.log(`  ⊘ Skipped: Invalid/incomplete repository URL (${repoUrl})`);
+            return { success: false, error: "Invalid or incomplete repository URL" };
+        }
+    }
+
     // Determine package name
     let packageName: string | undefined;
     let hasNpmPackage = false;
