@@ -81,6 +81,11 @@ interface McpServer {
         identifier: string;
         version?: string;
     }>;
+    remotes?: Array<{
+        type: string;
+        url: string;
+    }>;
+    [key: string]: unknown;
 }
 
 interface RegistryData {
@@ -377,80 +382,66 @@ async function buildServer(
 
     // Determine package name
     let packageName: string | undefined;
+    let hasNpmPackage = false;
+    let hasOciPackage = false;
+
     if (server.packages && server.packages.length > 0) {
         const npmPackage = server.packages.find(p => p.registryType === "npm" || p.registryType === "npmjs");
         if (npmPackage) {
             packageName = npmPackage.identifier;
+            hasNpmPackage = true;
+        }
+
+        // Check for existing OCI/Docker images
+        const ociPackage = server.packages.find(p => p.registryType === "oci" || p.registryType === "docker");
+        if (ociPackage) {
+            hasOciPackage = true;
         }
     }
 
-    // If no package and no repo, skip
+    // SKIP RULE 1: Servers with existing OCI/Docker images
+    if (hasOciPackage) {
+        const ociPkg = server.packages!.find(p => p.registryType === "oci" || p.registryType === "docker");
+        console.log(`  ⊘ Skipped: Already has public Docker image (${ociPkg?.identifier})`);
+        return { success: false, error: "Already has public Docker image" };
+    }
+
+    // SKIP RULE 2: HTTP/SSE servers (already remote-capable)
+    if (server.transport === "http" || server.remoteUrl || (server.remotes && server.remotes.length > 0)) {
+        console.log(`  ⊘ Skipped: Already remote-capable (HTTP/SSE)`);
+        if (server.remoteUrl) {
+            console.log(`    Remote URL: ${server.remoteUrl}`);
+        }
+        return { success: false, error: "Already remote-capable via HTTP/SSE" };
+    }
+
+    // SKIP RULE 3: NPM-only packages without repo (users can use npx)
+    if (hasNpmPackage && !repoUrl) {
+        console.log(`  ⊘ Skipped: NPM package available, use npx (${packageName})`);
+        return { success: false, error: "Use npx instead of containerization" };
+    }
+
+    // SKIP RULE 4: No package and no repo
     if (!packageName && !repoUrl) {
-        console.log(`  ⊘ Skipped: No package name or repository URL`);
+        console.log(`  ⊘ Skipped: No package or repository found`);
         return { success: false, error: "No package or repository URL" };
     }
 
-    // Generate clean image tag - extract meaningful name from slug/name
-    // Remove common prefixes (mcp-, -mcp, server-, -server, author names)
-    // But preserve the actual descriptive part
-    let cleanName = server.name || server.slug;
-
-    // Remove namespace/author prefix if present (e.g., "io.github.author/server" -> "server")
-    if (cleanName.includes('/')) {
-        cleanName = cleanName.split('/').pop() || cleanName;
-    }
-
-    // Remove common prefixes and suffixes
-    cleanName = cleanName
-        .replace(/^mcp[-_]?/i, '')           // Remove mcp- prefix
-        .replace(/[-_]?mcp$/i, '')           // Remove -mcp suffix
-        .replace(/^server[-_]?/i, '')        // Remove server- prefix  
-        .replace(/[-_]?server$/i, '')        // Remove -server suffix
+    // Generate clean image tag using namespace/slug for consistency
+    const cleanName = `${server.namespace}-${server.slug}`
         .toLowerCase()
         .replace(/[^a-z0-9-]/g, '-')         // Clean special chars
         .replace(/--+/g, '-')                // Remove double dashes
         .replace(/^-+|-+$/g, '');            // Trim dashes
 
-    // Fallback to slug if name becomes empty
-    if (!cleanName || cleanName.length < 2) {
-        cleanName = server.slug.toLowerCase().replace(/[^a-z0-9-]/g, "-");
-    }
-
     let imageName = `${DOCKER_REGISTRY}/${cleanName}`;
-
-    // Check if server already has an npm package - skip containerization
-    // Users can just use `npx <package>` directly
-    if (packageName && !repoUrl) {
-        console.log(`  ⊘ Skipped: Has NPM package (${packageName}), no containerization needed`);
-        return { success: false, error: "Has NPM package, use npx instead" };
-    }
 
     let repoDir: string | null = null;
     let sha: string | undefined;
-
-    // Determine the image tag early to check GHCR
     let fullImageName = imageName;
 
-    // If we have a repo, we'll use SHA-based tagging
-    if (repoUrl) {
-        // We need to clone first to get the SHA for checking GHCR
-        // But let's try a predictable tag pattern first
-        fullImageName = `${imageName}:latest`;
-    } else if (packageName) {
-        fullImageName = `${imageName}:latest`;
-    }
-
-    // Check if image already exists on GHCR
-    console.log(`  Checking GHCR for existing image...`);
-    const imageExists = await checkImageExistsOnGHCR(fullImageName);
-
-    if (imageExists) {
-        console.log(`  ⊘ Skipped: Image already exists on GHCR (${fullImageName})`);
-        return { success: true, image: fullImageName };
-    }
-
     try {
-        // Strategy 1 & 2: Clone repository if available
+        // Strategy 1 & 2: Clone repository if available to get SHA first
         if (repoUrl) {
             repoDir = path.join(TEMP_DIR, cleanName);
             await fs.mkdir(TEMP_DIR, { recursive: true });
@@ -463,63 +454,81 @@ async function buildServer(
             }
 
             sha = cloneResult.sha;
-            imageName = `${imageName}:${sha}`;
+            fullImageName = `${imageName}:${sha}`;
+
+            // Check if this SHA-tagged image already exists on GHCR
+            console.log(`  Checking GHCR for existing image...`);
+            const imageExists = await checkImageExistsOnGHCR(fullImageName);
+
+            if (imageExists) {
+                console.log(`  ⊘ Skipped: Image already exists on GHCR (${fullImageName})`);
+                return { success: true, image: fullImageName };
+            }
 
             // Strategy 1: Check for existing Dockerfile
             const dockerfilePath = path.join(repoDir, "Dockerfile");
             try {
                 await fs.access(dockerfilePath);
-                const buildResult = await buildWithExistingDockerfile(repoDir, imageName);
+                const buildResult = await buildWithExistingDockerfile(repoDir, fullImageName);
 
                 if (buildResult.success) {
                     // Push and verify
-                    const pushResult = await pushImage(imageName);
+                    const pushResult = await pushImage(fullImageName);
                     if (!pushResult.success) {
                         return { success: false, error: pushResult.error };
                     }
 
-                    return { success: true, image: imageName };
+                    return { success: true, image: fullImageName };
                 }
             } catch {
                 // No Dockerfile, continue to next strategy
             }
 
             // Strategy 2: Try Nixpacks
-            const nixpacksResult = await buildWithNixpacks(repoDir, imageName);
+            const nixpacksResult = await buildWithNixpacks(repoDir, fullImageName);
             if (nixpacksResult.success) {
-                const pushResult = await pushImage(imageName);
+                const pushResult = await pushImage(fullImageName);
                 if (!pushResult.success) {
                     return { success: false, error: pushResult.error };
                 }
 
-                return { success: true, image: imageName };
+                return { success: true, image: fullImageName };
             }
         }
 
-        // Strategy 3: Universal Bridge fallback
+        // Strategy 3: Universal Bridge fallback (for NPM packages with repos or packages only)
         if (packageName) {
             // Use "latest" tag for universal bridge
-            imageName = `${DOCKER_REGISTRY}/${cleanName}:latest`;
+            fullImageName = `${imageName}:latest`;
 
-            const bridgeResult = await buildWithUniversalBridge(packageName, imageName);
+            // Check GHCR for NPM-based images
+            console.log(`  Checking GHCR for existing image...`);
+            const imageExists = await checkImageExistsOnGHCR(fullImageName);
+
+            if (imageExists) {
+                console.log(`  ⊘ Skipped: Image already exists on GHCR (${fullImageName})`);
+                return { success: true, image: fullImageName };
+            }
+
+            const bridgeResult = await buildWithUniversalBridge(packageName, fullImageName);
             if (!bridgeResult.success) {
                 return { success: false, error: bridgeResult.error };
             }
 
             // Verify health
-            const healthResult = await verifyServerHealth(imageName);
+            const healthResult = await verifyServerHealth(fullImageName);
             if (!healthResult.success) {
                 console.warn(`  ⚠ Health check failed: ${healthResult.error}`);
                 // Continue anyway - health checks can be flaky
             }
 
             // Push
-            const pushResult = await pushImage(imageName);
+            const pushResult = await pushImage(fullImageName);
             if (!pushResult.success) {
                 return { success: false, error: pushResult.error };
             }
 
-            return { success: true, image: imageName };
+            return { success: true, image: fullImageName };
         }
 
         return { success: false, error: "All build strategies failed" };
@@ -609,15 +618,26 @@ async function main() {
 
     console.log(`Loaded ${registry.count} servers from registry`);
 
-    // Filter stdio servers with repositories or packages
+    // Filter servers that need containerization
     let serversToProcess = registry.servers.filter(s => {
-        // Skip if already has image
+        // Skip if already has a container image built
         if (s.image) return false;
 
-        // Skip if remote (HTTP/SSE)
-        if (s.transport === "http" || s.remoteUrl) return false;
+        // Skip if remote-capable (HTTP/SSE)
+        if (s.transport === "http") return false;
+        if (s.remoteUrl) return false;
+        if (s.remotes && s.remotes.length > 0) return false;
 
-        // Must have repository URL or package
+        // Skip if already has public OCI/Docker image
+        if (s.packages && s.packages.some(p => p.registryType === "oci" || p.registryType === "docker")) {
+            return false;
+        }
+
+        // Skip NPM-only packages (no repo = just use npx)
+        const hasNpm = s.packages && s.packages.some(p => p.registryType === "npm" || p.registryType === "npmjs");
+        if (hasNpm && !s.repository?.url) return false;
+
+        // Must have repository URL or NPM package with repo
         return !!(s.repository?.url || (s.packages && s.packages.length > 0));
     });
 
