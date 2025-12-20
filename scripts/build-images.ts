@@ -301,17 +301,25 @@ async function buildWithPythonMCP(
         for (let i = 0; i < cmdVariations.length; i++) {
             const cmd = cmdVariations[i];
 
-            // Create a Dockerfile for Python MCP server
+            // Create a robust Dockerfile for Python MCP server
             const dockerfile = `FROM python:3.11-slim
+
+# Install common build dependencies for Python packages
+RUN apt-get update && apt-get install -y --no-install-recommends \\
+    build-essential \\
+    gcc \\
+    g++ \\
+    git \\
+    && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 
 # Copy project files
 COPY . .
 
-# Install dependencies
-${hasRequirements ? 'RUN pip install --no-cache-dir -r requirements.txt' : ''}
-${hasPyproject ? 'RUN pip install --no-cache-dir .' : ''}
+# Install dependencies with verbose output
+${hasRequirements ? 'RUN pip install --no-cache-dir --verbose -r requirements.txt' : ''}
+${hasPyproject ? 'RUN pip install --no-cache-dir --verbose .' : ''}
 
 # Run MCP server
 ${cmd}
