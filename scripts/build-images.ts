@@ -231,6 +231,56 @@ async function buildWithExistingDockerfile(
     }
 }
 
+async function buildWithPythonMCP(
+    repoDir: string,
+    imageName: string
+): Promise<{ success: boolean; error?: string }> {
+    try {
+        console.log(`    Strategy: Python MCP auto-build`);
+
+        // Check for Python project files
+        const hasRequirements = await fs.access(path.join(repoDir, "requirements.txt")).then(() => true).catch(() => false);
+        const hasPyproject = await fs.access(path.join(repoDir, "pyproject.toml")).then(() => true).catch(() => false);
+
+        if (!hasRequirements && !hasPyproject) {
+            return { success: false, error: "No Python project files found" };
+        }
+
+        // Create a Dockerfile for Python MCP server
+        const dockerfile = `FROM python:3.11-slim
+
+WORKDIR /app
+
+# Copy project files
+COPY . .
+
+# Install dependencies
+${hasRequirements ? 'RUN pip install --no-cache-dir -r requirements.txt' : ''}
+${hasPyproject ? 'RUN pip install --no-cache-dir .' : ''}
+
+# Find and run the main MCP server file
+CMD ["python", "-m", "mcp"]
+
+LABEL org.opencontainers.image.source=https://github.com/compose-market/mcp
+`;
+
+        await fs.writeFile(path.join(repoDir, "Dockerfile.mcp"), dockerfile);
+
+        // Build with the generated Dockerfile
+        await execAsync(
+            `docker build --label "org.opencontainers.image.source=https://github.com/compose-market/mcp" -f ${path.join(repoDir, "Dockerfile.mcp")} -t ${imageName} ${repoDir}`,
+            { maxBuffer: 10 * 1024 * 1024 }
+        );
+
+        console.log(`    ✓ Built with Python MCP strategy`);
+        return { success: true };
+    } catch (error) {
+        const errorMsg = error instanceof Error ? error.message : String(error);
+        console.log(`    ✗ Python MCP build failed: ${errorMsg.substring(0, 200)}`);
+        return { success: false, error: errorMsg };
+    }
+}
+
 async function buildWithNixpacks(
     repoDir: string,
     imageName: string
@@ -262,7 +312,9 @@ async function buildWithNixpacks(
         console.log(`    ✓ Built with Nixpacks`);
         return { success: true };
     } catch (error) {
-        return { success: false, error: error instanceof Error ? error.message : String(error) };
+        const errorMsg = error instanceof Error ? error.message : String(error);
+        console.log(`    ✗ Nixpacks build failed: ${errorMsg.substring(0, 200)}`);
+        return { success: false, error: errorMsg };
     }
 }
 
@@ -539,7 +591,17 @@ async function buildServer(
                 // No Dockerfile, continue to next strategy
             }
 
-            // Strategy 2: Try Nixpacks
+            // Strategy 2: Try Python MCP build
+            const pythonResult = await buildWithPythonMCP(repoDir, fullImageName);
+            if (pythonResult.success) {
+                const pushResult = await pushImage(fullImageName);
+                if (!pushResult.success) {
+                    return { success: false, error: pushResult.error };
+                }
+                return { success: true, image: fullImageName };
+            }
+
+            // Strategy 3: Try Nixpacks
             const nixpacksResult = await buildWithNixpacks(repoDir, fullImageName);
             if (nixpacksResult.success) {
                 const pushResult = await pushImage(fullImageName);
