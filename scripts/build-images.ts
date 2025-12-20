@@ -343,8 +343,11 @@ LABEL org.opencontainers.image.source=https://github.com/compose-market/mcp
         return { success: false, error: "All CMD variations failed" };
     } catch (error) {
         const errorMsg = error instanceof Error ? error.message : String(error);
-        // Show MORE of the error (first 500 chars instead of 200)
-        console.log(`    ✗ Python MCP build failed: ${errorMsg.substring(0, 500)}`);
+        // Show first 300 + last 200 chars to see both the command and the actual error
+        const errorPreview = errorMsg.length > 500
+            ? errorMsg.substring(0, 300) + '\n...\n' + errorMsg.slice(-200)
+            : errorMsg;
+        console.log(`    ✗ Python MCP build failed:\n${errorPreview}`);
         return { success: false, error: errorMsg };
     }
 }
@@ -381,7 +384,11 @@ async function buildWithNixpacks(
         return { success: true };
     } catch (error) {
         const errorMsg = error instanceof Error ? error.message : String(error);
-        console.log(`    ✗ Nixpacks build failed: ${errorMsg.substring(0, 500)}`);
+        // Show first 300 + last 200 chars to see both the command and the actual error
+        const errorPreview = errorMsg.length > 500
+            ? errorMsg.substring(0, 300) + '\n...\n' + errorMsg.slice(-200)
+            : errorMsg;
+        console.log(`    ✗ Nixpacks build failed:\n${errorPreview}`);
         return { success: false, error: errorMsg };
     }
 }
