@@ -3,3 +3,4 @@ node_modules/
 *.log
 .env
 build-progress.json
+scripts/delete-all-images.js
