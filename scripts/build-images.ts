@@ -453,7 +453,12 @@ async function buildServer(
         cleanName = server.name
             .toLowerCase()
             .replace(/^@/, '')              // Remove npm scope prefix like @modelcontextprotocol/
-            .replace(/[^a-z0-9-\/]/g, '-')  // Clean special chars (keep /)
+            .replace(/\s*mcp\s*server\s*/gi, '')    // Remove "MCP Server"
+            .replace(/\s*server\s*/gi, '')          // Remove "Server"
+            .replace(/\s*mcp\s*/gi, '')             // Remove "MCP"
+            .replace(/\s*by\s+[\w-]+/gi, '')        // Remove "by author"
+            .replace(/\s*\|\s*.+$/g, '')            // Remove "| Glama" etc
+            .replace(/[^a-z0-9-]/g, '-')            // Clean special chars
             .replace(/--+/g, '-')           // Remove double dashes
             .replace(/^-+|-+$/g, '');       // Trim dashes
 
