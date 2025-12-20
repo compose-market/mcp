@@ -37,8 +37,9 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 // Configuration
-const REGISTRY_PATH = path.resolve(__dirname, "../src/data/mcpServers.json");
-const PROGRESS_PATH = path.resolve(__dirname, "../src/data/build-progress.json");
+// From mcp/scripts, go up to compose-market root, then into backend/services/connector/data
+const REGISTRY_PATH = path.resolve(__dirname, "../../../backend/services/connector/data/mcpServers.json");
+const PROGRESS_PATH = path.resolve(__dirname, "../../../backend/services/connector/data/build-progress.json");
 const DOCKER_REGISTRY = "ghcr.io/compose-market/mcp";
 const TEMPLATE_DIR = path.resolve(__dirname, "../templates/mcp-container");
 const TEMP_DIR = path.resolve(__dirname, "../.build-temp");
@@ -80,6 +81,11 @@ interface McpServer {
         registryType: string;
         identifier: string;
         version?: string;
+        spawn?: {
+            command?: string;
+            args?: string[];
+            env?: Record<string, string>;
+        };
     }>;
     remotes?: Array<{
         type: string;
@@ -437,14 +443,34 @@ async function buildServer(
         return { success: false, error: "No package or repository URL" };
     }
 
-    // Generate clean image tag using namespace/slug for consistency
-    const cleanName = `${server.namespace}-${server.slug}`
-        .toLowerCase()
-        .replace(/[^a-z0-9-]/g, '-')         // Clean special chars
-        .replace(/--+/g, '-')                // Remove double dashes
-        .replace(/^-+|-+$/g, '');            // Trim dashes
+    // Generate Docker image name using actual server name (not namespace-slug concatenation)
+    // This produces correct names like "google-calendar" instead of "io-github-google-calendar-mcp"
+    let imageName: string;
+    let cleanName: string;
 
-    let imageName = `${DOCKER_REGISTRY}/${cleanName}`;
+    if (server.name) {
+        // Use the actual name field from metadata
+        cleanName = server.name
+            .toLowerCase()
+            .replace(/^@/, '')              // Remove npm scope prefix like @modelcontextprotocol/
+            .replace(/[^a-z0-9-\/]/g, '-')  // Clean special chars (keep /)
+            .replace(/--+/g, '-')           // Remove double dashes
+            .replace(/^-+|-+$/g, '');       // Trim dashes
+
+        imageName = `${DOCKER_REGISTRY}/${cleanName}`;
+    } else {
+        // Fallback to namespace-slug only if name is missing
+        console.warn(`  Warning: No name field, using namespace-slug`);
+        cleanName = `${server.namespace}-${server.slug}`
+            .toLowerCase()
+            .replace(/[^a-z0-9-]/g, '-')
+            .replace(/--+/g, '-')
+            .replace(/^-+|-+$/g, '');
+
+        imageName = `${DOCKER_REGISTRY}/${cleanName}`;
+    }
+
+
 
     let repoDir: string | null = null;
     let sha: string | undefined;
@@ -643,12 +669,12 @@ async function main() {
             return false;
         }
 
-        // Skip NPM-only packages (no repo = just use npx)
+        // Skip if has NPM package (can use npx directly, regardless of repo)
         const hasNpm = s.packages && s.packages.some(p => p.registryType === "npm" || p.registryType === "npmjs");
-        if (hasNpm && !s.repository?.url) return false;
+        if (hasNpm) return false;
 
-        // Must have repository URL or NPM package with repo
-        return !!(s.repository?.url || (s.packages && s.packages.length > 0));
+        // Must have repository URL to build from source
+        return !!s.repository?.url;
     });
 
     console.log(`${serversToProcess.length} stdio servers eligible for containerization`);
