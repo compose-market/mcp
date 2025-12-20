@@ -188,10 +188,10 @@ async function cloneRepository(repoUrl: string, destDir: string): Promise<{ succ
         };
         delete (cleanEnv as any).GIT_CONFIG_GLOBAL;
 
-        await execAsync(`git clone --depth 1 "${repoUrl}" "${destDir}"`, {
-            env: cleanEnv,
-            maxBuffer: 10 * 1024 * 1024
-        });
+        await execAsync(
+            `git -c credential.helper= -c core.askPass= clone --depth 1 "${repoUrl}" "${destDir}"`,
+            { env: cleanEnv, maxBuffer: 10 * 1024 * 1024 }
+        );
 
         // Get SHA
         const { stdout: sha } = await execAsync(`git -C "${destDir}" rev-parse --short HEAD`);
