@@ -176,7 +176,11 @@ async function cloneRepository(repoUrl: string, destDir: string): Promise<{ succ
         const git = simpleGit();
         console.log(`    Cloning: ${repoUrl}`);
 
-        await git.clone(repoUrl, destDir, ["--depth", "1"]);
+        await git.clone(repoUrl, destDir, [
+            '--depth', '1',
+            '-c', 'credential.helper=',
+            '-c', 'core.askPass=',
+        ]);
 
         const clonedGit = simpleGit(destDir);
         const log = await clonedGit.log(["-1"]);
