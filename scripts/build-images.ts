@@ -37,9 +37,9 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 // Configuration
-// From mcp/scripts, go up to compose-market root, then into backend/services/connector/data
-const REGISTRY_PATH = path.resolve(__dirname, "../../../backend/services/connector/data/mcpServers.json");
-const PROGRESS_PATH = path.resolve(__dirname, "../../../backend/services/connector/data/build-progress.json");
+// Data directory is now local to mcp repo for simplicity in CI/CD
+const REGISTRY_PATH = path.resolve(__dirname, "../data/mcpServers.json");
+const PROGRESS_PATH = path.resolve(__dirname, "../data/build-progress.json");
 const DOCKER_REGISTRY = "ghcr.io/compose-market/mcp";
 const TEMPLATE_DIR = path.resolve(__dirname, "../templates/mcp-container");
 const TEMP_DIR = path.resolve(__dirname, "../.build-temp");
