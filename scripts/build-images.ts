@@ -173,21 +173,30 @@ async function checkImageExistsOnGHCR(imageName: string): Promise<boolean> {
 
 async function cloneRepository(repoUrl: string, destDir: string): Promise<{ success: boolean; sha?: string; error?: string }> {
     try {
-        const git = simpleGit();
         console.log(`    Cloning: ${repoUrl}`);
 
-        await git.clone(repoUrl, destDir, [
-            '--depth', '1',
-            '-c', 'credential.helper=',
-            '-c', 'core.askPass=',
-        ]);
+        // Use raw git command with environment that disables credentials
+        // This prevents git from trying to authenticate to other people's public repos
+        const env = {
+            ...process.env,
+            GIT_TERMINAL_PROMPT: '0',
+            GIT_ASKPASS: 'echo',
+            GIT_CONFIG_NOSYSTEM: '1',  // Ignore system git config
+        };
 
-        const clonedGit = simpleGit(destDir);
-        const log = await clonedGit.log(["-1"]);
-        const sha = log.latest?.hash.substring(0, 7) || "unknown";
+        await execAsync(
+            `git clone --depth 1 -c credential.helper= -c core.askPass= "${repoUrl}" "${destDir}"`,
+            { env, maxBuffer: 10 * 1024 * 1024 }
+        );
 
-        console.log(`    ✓ Cloned (SHA: ${sha})`);
-        return { success: true, sha };
+        // Get SHA
+        const { stdout: sha } = await execAsync(
+            `git -C "${destDir}" rev-parse --short HEAD`,
+            { env }
+        );
+
+        console.log(`    ✓ Cloned (SHA: ${sha.trim()})`);
+        return { success: true, sha: sha.trim() };
     } catch (error) {
         console.error(`    ✗ Clone failed: ${error instanceof Error ? error.message : String(error)}`);
         return { success: false, error: error instanceof Error ? error.message : String(error) };
