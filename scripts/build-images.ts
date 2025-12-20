@@ -29,9 +29,11 @@ dotenv.config();
 
 const execAsync = promisify(exec);
 
-// Disable git credential prompts to avoid hanging on private repos
+// Disable git credential prompts and helpers to avoid authentication issues with public repos
 process.env.GIT_TERMINAL_PROMPT = "0";
 process.env.GIT_ASKPASS = "echo";
+process.env.GIT_CONFIG_NOSYSTEM = "1";  // Ignore system git config
+delete process.env.GIT_CONFIG_GLOBAL;     // Ignore global git config
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -173,30 +175,17 @@ async function checkImageExistsOnGHCR(imageName: string): Promise<boolean> {
 
 async function cloneRepository(repoUrl: string, destDir: string): Promise<{ success: boolean; sha?: string; error?: string }> {
     try {
+        const git = simpleGit();
         console.log(`    Cloning: ${repoUrl}`);
 
-        // Use raw git command with environment that disables credentials
-        // This prevents git from trying to authenticate to other people's public repos
-        const env = {
-            ...process.env,
-            GIT_TERMINAL_PROMPT: '0',
-            GIT_ASKPASS: 'echo',
-            GIT_CONFIG_NOSYSTEM: '1',  // Ignore system git config
-        };
+        await git.clone(repoUrl, destDir, ['--depth', '1']);
 
-        await execAsync(
-            `git clone --depth 1 -c credential.helper= -c core.askPass= "${repoUrl}" "${destDir}"`,
-            { env, maxBuffer: 10 * 1024 * 1024 }
-        );
+        const clonedGit = simpleGit(destDir);
+        const log = await clonedGit.log(["-1"]);
+        const sha = log.latest?.hash.substring(0, 7) || "unknown";
 
-        // Get SHA
-        const { stdout: sha } = await execAsync(
-            `git -C "${destDir}" rev-parse --short HEAD`,
-            { env }
-        );
-
-        console.log(`    ✓ Cloned (SHA: ${sha.trim()})`);
-        return { success: true, sha: sha.trim() };
+        console.log(`    ✓ Cloned (SHA: ${sha})`);
+        return { success: true, sha };
     } catch (error) {
         console.error(`    ✗ Clone failed: ${error instanceof Error ? error.message : String(error)}`);
         return { success: false, error: error instanceof Error ? error.message : String(error) };
