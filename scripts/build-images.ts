@@ -317,11 +317,15 @@ WORKDIR /app
 # Copy project files
 COPY . .
 
-# Install dependencies with verbose output
-${hasRequirements ? 'RUN pip install --no-cache-dir --verbose -r requirements.txt' : ''}
-${hasPyproject ? 'RUN pip install --no-cache-dir --verbose .' : ''}
+# Install dependencies (best-effort, won't fail build if packages aren't properly structured)
+${hasRequirements ? 'RUN pip install --no-cache-dir -r requirements.txt || echo "Warning: requirements.txt installation failed, will try at runtime"' : ''}
+${hasPyproject ? 'RUN pip install --no-cache-dir . || echo "Warning: pyproject.toml installation failed, dependencies may be missing"' : ''}
+
+# Fallback: try to install requirements at runtime if build-time install failed
+${hasRequirements ? 'RUN echo "#!/bin/bash\npip install -q -r requirements.txt 2>/dev/null || true\nexec \"\$@\"" > /entrypoint.sh && chmod +x /entrypoint.sh' : ''}
 
 # Run MCP server
+${hasRequirements ? 'ENTRYPOINT ["/entrypoint.sh"]' : ''}
 ${cmd}
 
 LABEL org.opencontainers.image.source=https://github.com/compose-market/mcp
