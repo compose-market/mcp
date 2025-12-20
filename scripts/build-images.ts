@@ -246,8 +246,63 @@ async function buildWithPythonMCP(
             return { success: false, error: "No Python project files found" };
         }
 
-        // Create a Dockerfile for Python MCP server
-        const dockerfile = `FROM python:3.11-slim
+        // Auto-detect Python entry point
+        const possibleEntryPoints = [
+            'src/index.py',
+            'src/server.py',
+            'src/main.py',
+            'index.py',
+            'server.py',
+            'main.py',
+            'app.py',
+            '__main__.py'
+        ];
+
+        let entryPoint = null;
+        for (const ep of possibleEntryPoints) {
+            const exists = await fs.access(path.join(repoDir, ep)).then(() => true).catch(() => false);
+            if (exists) {
+                entryPoint = ep;
+                console.log(`    Found entry point: ${ep}`);
+                break;
+            }
+        }
+
+        // Check pyproject.toml for entry points
+        if (!entryPoint && hasPyproject) {
+            try {
+                const pyprojectContent = await fs.readFile(path.join(repoDir, "pyproject.toml"), 'utf8');
+                const scriptMatch = pyprojectContent.match(/\[tool\.poetry\.scripts\]\s*([\w-]+)\s*=/m);
+                if (scriptMatch) {
+                    entryPoint = `poetry run ${scriptMatch[1]}`;
+                    console.log(`    Found Poetry script: ${scriptMatch[1]}`);
+                }
+            } catch {
+                // Ignore pyproject.toml parse errors
+            }
+        }
+
+        // Build CMD variations to try
+        const cmdVariations = [];
+        if (entryPoint) {
+            if (entryPoint.startsWith('poetry run')) {
+                cmdVariations.push(`CMD ${JSON.stringify(entryPoint.split(' '))}`);
+            } else {
+                cmdVariations.push(`CMD ["python", "${entryPoint}"]`);
+                cmdVariations.push(`CMD ["python", "-m", "${entryPoint.replace(/\.py$/, '').replace(/\//g, '.')}"]`);
+            }
+        }
+        // Generic fallbacks
+        cmdVariations.push('CMD ["python", "-m", "mcp"]');
+        cmdVariations.push('CMD ["python", "src/index.py"]');
+        cmdVariations.push('CMD ["python", "index.py"]');
+
+        // Try each CMD variation
+        for (let i = 0; i < cmdVariations.length; i++) {
+            const cmd = cmdVariations[i];
+
+            // Create a Dockerfile for Python MCP server
+            const dockerfile = `FROM python:3.11-slim
 
 WORKDIR /app
 
@@ -258,25 +313,38 @@ COPY . .
 ${hasRequirements ? 'RUN pip install --no-cache-dir -r requirements.txt' : ''}
 ${hasPyproject ? 'RUN pip install --no-cache-dir .' : ''}
 
-# Find and run the main MCP server file
-CMD ["python", "-m", "mcp"]
+# Run MCP server
+${cmd}
 
 LABEL org.opencontainers.image.source=https://github.com/compose-market/mcp
 `;
 
-        await fs.writeFile(path.join(repoDir, "Dockerfile.mcp"), dockerfile);
+            await fs.writeFile(path.join(repoDir, "Dockerfile.mcp"), dockerfile);
 
-        // Build with the generated Dockerfile
-        await execAsync(
-            `docker build --label "org.opencontainers.image.source=https://github.com/compose-market/mcp" -f ${path.join(repoDir, "Dockerfile.mcp")} -t ${imageName} ${repoDir}`,
-            { maxBuffer: 10 * 1024 * 1024 }
-        );
+            try {
+                // Build with the generated Dockerfile
+                await execAsync(
+                    `docker build --label "org.opencontainers.image.source=https://github.com/compose-market/mcp" -f ${path.join(repoDir, "Dockerfile.mcp")} -t ${imageName} ${repoDir}`,
+                    { maxBuffer: 10 * 1024 * 1024 }
+                );
 
-        console.log(`    ✓ Built with Python MCP strategy`);
-        return { success: true };
+                console.log(`    ✓ Built with Python MCP strategy (CMD: ${cmd.substring(0, 50)})`);
+                return { success: true };
+            } catch (buildError) {
+                if (i === cmdVariations.length - 1) {
+                    // Last attempt failed, throw error
+                    throw buildError;
+                }
+                // Try next CMD variation
+                console.log(`    Trying next CMD variation...`);
+            }
+        }
+
+        return { success: false, error: "All CMD variations failed" };
     } catch (error) {
         const errorMsg = error instanceof Error ? error.message : String(error);
-        console.log(`    ✗ Python MCP build failed: ${errorMsg.substring(0, 200)}`);
+        // Show MORE of the error (first 500 chars instead of 200)
+        console.log(`    ✗ Python MCP build failed: ${errorMsg.substring(0, 500)}`);
         return { success: false, error: errorMsg };
     }
 }
@@ -313,7 +381,7 @@ async function buildWithNixpacks(
         return { success: true };
     } catch (error) {
         const errorMsg = error instanceof Error ? error.message : String(error);
-        console.log(`    ✗ Nixpacks build failed: ${errorMsg.substring(0, 200)}`);
+        console.log(`    ✗ Nixpacks build failed: ${errorMsg.substring(0, 500)}`);
         return { success: false, error: errorMsg };
     }
 }
